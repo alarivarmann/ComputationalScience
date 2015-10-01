@@ -1,0 +1,274 @@
+
+from __future__ import print_function
+import math
+import time
+import vtk
+
+
+# ANIMATION IDEAS --------------------------
+
+# TABLE ON VTKARRAY KAHE NUMPY-CONVERTED TULBAGA
+
+class upThread(threading.Thread):
+
+    def __init__(self, threadID):
+        self.threadID = threadID
+        threading.Thread.__init__(self)
+
+    def run(self):
+        global table, amp
+        global update_on
+
+        while (update_on):
+            # print 'Maths Update'
+            time.sleep(0.001)
+
+            # Generate new positions
+            threadLock.acquire()
+            amp += 0.02*N.random.randn(num_pts)
+            table.Modified()
+            threadLock.release()
+
+class vtkTimerCallback():
+   def __init__(self):
+       self.timer_count = 0
+
+   def execute(self,obj,event):
+       print(self.timer_count)
+       self.actor.SetPosition(self.timer_count, self.timer_count,0);
+       iren = obj
+       iren.GetRenderWindow().Render()
+       self.timer_count += 1
+
+
+# ------------------------------------------------
+
+def main():
+    path_to_data_file = 'events3.csv'
+    data = parse_csv(path_to_data_file)
+    location, magnitude, time_seconds = generate_3D_map_data(data)
+    render_3D_points(location, magnitude, time_seconds, data)
+
+
+def parse_csv(path):
+    """
+    Parses the eqarthquake funny looking CSV file.
+
+    Returns a list of lists containing row values:
+    [time_stamp, longitude, depth, magnitude, source].
+    """
+    data = list()
+
+    f = open(path)
+
+    for line in f:
+        if line[0] == '#':
+            continue
+        line = line.strip()[0:-1].split(';')
+
+        time_stamp = int(time.mktime(time.strptime(line[0], '%Y-%m-%d %H:%M:%S.%f')))
+        latitude, longitude, depth = ([float(x) for x in line[1:4]])
+        magnitude = float(line[4].split('--')[0])
+        source = line[5]
+
+        data.append([time_stamp, latitude, longitude, depth, magnitude, source])
+
+    f.close()
+
+    return data
+
+
+def distance(lat1, lon1, lat2, lon2):
+    """
+    Returns distance in kilometres based on latitude and longitude of 2 coordinates.
+    """
+    R = 6371
+    dLat = math.radians(lat2 - lat1)
+    dLon = math.radians(lon2 - lon1)
+    lat1 = math.radians(lat1)
+    lat2 = math.radians(lat2)
+
+    a = math.sin(dLat / 2.0) * math.sin(dLat / 2.0) + math.sin(dLon / 2.0) * math.sin(dLon / 2.0) * math.cos(lat1) * math.cos(lat2)
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    d = R * c
+    return d
+
+
+def generate_3D_map_data(data):
+    """
+    Uses the data to create VTK objects for rendering.
+    """
+    # Create an array of Points
+    location = vtk.vtkPoints()
+    # Create arrays of Scalars
+    magnitude = vtk.vtkFloatArray()
+    time_seconds = vtk.vtkFloatArray()
+
+    LatMax = 0
+    LatMin = 360
+    LonMax = 0
+    LonMin = 360
+
+    for data_point in data:
+        t, x, y, z, r = (data_point[:-1]) # x- latitude; y - longitude, z - depth
+
+        # Compute the extremity of the locations
+        if x > LatMax:
+            LatMax = x
+        if x < LatMin:
+            LatMin = x
+        if y > LonMax:
+            LonMax = y
+        if y < LonMin:
+            LonMin = y
+
+        # Insert floats into the point array
+        location.InsertNextPoint(x, y, z)
+        magnitude.InsertNextValue(r)
+        time_seconds.InsertNextValue(t / 1000.) # I added divide by 1000 to convert to seconds
+
+    # Compute the range of the data using the distance function
+    x1 = distance(LatMin,LonMin,LatMax,LonMin)
+    x2 = distance(LatMin,LonMax,LatMax,LonMax)
+    y1 = distance(LatMin,LonMin,LatMin,LonMax)
+    y2 = distance(LatMax,LonMin,LatMax,LonMax)
+
+    # Adjust the location to kilometers relative to the origin (LatMin, LonMin) instead of latitude and longitude
+    xx = x1
+    l = location.GetNumberOfPoints()
+    i = 0
+    while i < l:
+        x,y,z = location.GetPoint(i)
+        u = (x - LatMin) / (LatMax - LatMin)
+        x = (x - LatMin) / (LatMax - LatMin) * xx
+
+        yy = (1 - u) * y1 + u * y2
+        y = (y - LonMin) / (LonMax - LonMin) * yy
+
+        location.SetPoint(i, x, y, z)
+        i = i + 1
+
+    return location, magnitude, time_seconds
+
+
+def render_3D_points(location, magnitude, time_seconds, myData):
+    """
+    Renders coordinates in 3D space using VTK.
+    """
+    data = vtk.vtkUnstructuredGrid()
+    data.SetPoints(location)
+    data.GetPointData().SetScalars(magnitude)
+
+    myGlyph = vtk.vtkGlyph3D() # glyph saab otse data, spheresource'i pole vaja !
+
+    myGlyph.SetInput(data)
+
+    myGlyph.SetScaleModeToScaleByScalar()
+    myGlyph.SetColorModeToColorByScalar()
+
+
+
+
+    """The strength (usually between 1.8-5.3) should affect the glyph (size, colour or your
+    own choice.)
+    A map shall also be included so that one can understand where the quakes occurs."""
+
+    colorTransferFunction = vtk.vtkColorTransferFunction()
+    colorTransferFunction.AddRGBPoint(0.0, 0.0, 0.0, 0.0)
+    colorTransferFunction.AddRGBPoint(2.0, 0.0, 0.0, 1.0)
+    colorTransferFunction.AddRGBPoint(2.5, 0.0, 1.0, 1.0)
+    colorTransferFunction.AddRGBPoint(3.0, 0.0, 1.0, 0.0)
+    colorTransferFunction.AddRGBPoint(4.0, 1.0, 1.0, 0.0)
+    colorTransferFunction.AddRGBPoint(5.0, 1.0, 0.0, 0.0)
+    colorTransferFunction.AddRGBPoint(6.0, 1.0, 0.0, 1.0)
+
+
+    myMapper = vtk.vtkPolyDataMapper()
+    myMapper.SetInputConnection(myGlyph.GetOutputPort())
+    myMapper.SetLookupTable(colorTransferFunction)
+
+    # setup display stuff
+    actor = vtk.vtkActor()
+    actor.SetMapper(myMapper)
+
+    # coordinate axis visualiser
+    transform = vtk.vtkTransform()
+    axes = vtk.vtkAxesActor()
+    axes.SetUserTransform(transform)
+
+    # this sets the x axis label to red
+    axes.GetXAxisCaptionActor2D().GetCaptionTextProperty().SetColor(1,0,0);
+    axes.GetYAxisCaptionActor2D().GetCaptionTextProperty().SetColor(0,1,0);
+    axes.GetZAxisCaptionActor2D().GetCaptionTextProperty().SetColor(0,0,1);
+
+    # the actual text of the axis label can be changed:
+    """axes.SetXAxisLabelText("latitude")
+    axes.SetYAxisLabelText("longitude")
+    axes.SetZAxisLabelText("depth")"""
+
+    axes.SetNormalizedShaftLength(500.0, 500.0, 500.0)
+
+    # render stuff
+    renderer = vtk.vtkRenderer()
+    renderer.SetBackground(0.0, 0.0, 0.0)
+
+    renderWindow = vtk.vtkRenderWindow()
+    renderWindow.SetSize(900,800)
+    renderWindow.AddRenderer(renderer)
+
+    # allow interactive functionality
+    renderWindowInteractor = vtk.vtkRenderWindowInteractor()
+    renderWindowInteractor.SetRenderWindow(renderWindow)
+
+    style = vtk.vtkInteractorStyleTrackballCamera()
+    renderWindowInteractor.SetInteractorStyle(style)
+
+    # add stuff that does stuff
+    renderer.AddActor(actor)
+    renderer.AddActor(axes)
+
+    # visualise
+    renderWindow.Render()
+
+# Initialize must be called prior to creating timer events.
+    renderWindowInteractor.Initialize()
+
+      # Sign up to receive TimerEvent
+    cb = vtkTimerCallback()
+    cb.actor = actor
+    renderWindowInteractor.AddObserver('TimerEvent', cb.execute)
+    timerId = renderWindowInteractor.CreateRepeatingTimer(100);
+
+      #start the interaction and timer
+    renderWindowInteractor.Start()
+
+    # ANIMATION IDEAS ENDING ----------------------------------------------
+    update_on = True
+    threadLock = threading.Lock()
+    up_thread = upThread(0)
+    up_thread.start()
+
+    def animate(obj=None, event=None):
+        # print 'Screen Update'
+        time.sleep(0.003)
+
+        threadLock.acquire()
+        view.Render()
+        threadLock.release()
+
+    iren = view.GetInteractor()
+    iren.AddObserver("TimerEvent", animate)
+
+    timer_id = iren.CreateRepeatingTimer(dt)
+
+    iren.Start()
+    update_on = False
+    iren.DestroyTimer(timer_id)
+
+    up_thread.join()
+
+# NOW THE PROGRAM SHOULD START -------------
+
+
+if __name__ == '__main__':
+    main()
